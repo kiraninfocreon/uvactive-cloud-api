@@ -1,0 +1,631 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Member {
+  member_id    String   @id
+  name         String
+  initials     String
+  age          Int?
+  sex          String?
+  weight_kg    Float?   @db.Real
+  height_cm    Float?   @db.Real
+  resting_hr   Int?
+  mhr          Int?
+  phone        String?
+  access_code  String?
+  auth_user_id String?  @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("members")
+}
+
+model Trainer {
+  id         String   @id @default(uuid())
+  trainer_id String?
+  email      String
+  name       String?
+  gym_name   String?
+  branch     String?
+  role       String   @default("trainer")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  synced_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("trainers")
+}
+
+model Session {
+  session_id              String                    @id
+  section_id              String?
+  session_name            String
+  trainerId               String?                   @map("trainer_id")
+  startedAt               DateTime                  @map("started_at") @db.Timestamptz(6)
+  endedAt                 DateTime?                 @map("ended_at") @db.Timestamptz(6)
+  duration_seconds        Int?
+  synced_at               DateTime                  @default(now()) @db.Timestamptz(6)
+  session_athlete_summary session_athlete_summary[]
+  session_packages        session_packages?
+
+  @@map("sessions")
+}
+
+model admin_otp {
+  id               Int               @id @default(autoincrement())
+  user_id          Int?
+  otp_code         String?           @db.VarChar(6)
+  created_at       DateTime?         @default(now()) @db.Timestamptz(6)
+  is_used          Boolean?          @default(false)
+  candidate_master candidate_master? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model auth_group {
+  id                      Int                       @id @default(autoincrement())
+  name                    String                    @unique @db.VarChar(150)
+  auth_group_permissions  auth_group_permissions[]
+  candidate_master_groups candidate_master_groups[]
+
+  @@index([name], map: "auth_group_name_a6ea08ec_like")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model auth_group_permissions {
+  id              BigInt          @id @default(autoincrement())
+  group_id        Int
+  permission_id   Int
+  auth_permission auth_permission @relation(fields: [permission_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "auth_group_permissio_permission_id_84c5c92e_fk_auth_perm")
+  auth_group      auth_group      @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "auth_group_permissions_group_id_b120cbf9_fk_auth_group_id")
+
+  @@unique([group_id, permission_id], map: "auth_group_permissions_group_id_permission_id_0cd325b0_uniq")
+  @@index([group_id], map: "auth_group_permissions_group_id_b120cbf9")
+  @@index([permission_id], map: "auth_group_permissions_permission_id_84c5c92e")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model auth_permission {
+  id                                Int                                 @id @default(autoincrement())
+  name                              String                              @db.VarChar(255)
+  content_type_id                   Int
+  codename                          String                              @db.VarChar(100)
+  auth_group_permissions            auth_group_permissions[]
+  django_content_type               django_content_type                 @relation(fields: [content_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "auth_permission_content_type_id_2f476e4b_fk_django_co")
+  candidate_master_user_permissions candidate_master_user_permissions[]
+
+  @@unique([content_type_id, codename], map: "auth_permission_content_type_id_codename_01ab375a_uniq")
+  @@index([content_type_id], map: "auth_permission_content_type_id_2f476e4b")
+}
+
+model candidate_master {
+  last_login                                                         DateTime?                           @db.Timestamptz(6)
+  is_superuser                                                       Boolean
+  id                                                                 Int                                 @id @default(autoincrement())
+  user_id                                                            String                              @unique @db.VarChar(254)
+  password                                                           String                              @db.VarChar(128)
+  first_name                                                         String                              @db.VarChar(100)
+  last_name                                                          String                              @db.VarChar(100)
+  mobile                                                             String?                             @unique @db.VarChar(15)
+  location                                                           String?                             @db.VarChar(100)
+  address                                                            String?
+  status                                                             String?                             @db.VarChar(50)
+  is_active                                                          Boolean
+  role                                                               String                              @db.VarChar(20)
+  admin_id                                                           Int?
+  company_name                                                       String?                             @db.VarChar(150)
+  designation                                                        String?                             @db.VarChar(100)
+  created_at                                                         DateTime                            @db.Timestamptz(6)
+  date_joined                                                        DateTime                            @db.Timestamptz(6)
+  is_staff                                                           Boolean
+  display_id                                                         String?                             @unique @db.VarChar(20)
+  admin_otp                                                          admin_otp[]
+  candidate_master_groups                                            candidate_master_groups[]
+  candidate_master_user_permissions                                  candidate_master_user_permissions[]
+  candidate_profile                                                  candidate_profile[]
+  django_admin_log                                                   django_admin_log[]
+  employer_profile                                                   employer_profile?
+  job_application                                                    job_application[]
+  job_fair                                                           job_fair[]
+  job_fair_request_job_fair_request_employer_idTocandidate_master    job_fair_request[]                  @relation("job_fair_request_employer_idTocandidate_master")
+  job_fair_request_job_fair_request_reviewed_by_idTocandidate_master job_fair_request[]                  @relation("job_fair_request_reviewed_by_idTocandidate_master")
+  job_id_sequence                                                    job_id_sequence?
+  job_master                                                         job_master[]
+  notification                                                       notification[]
+  resume_update_task                                                 resume_update_task[]
+
+  @@index([mobile], map: "candidate_master_mobile_e638fd09_like")
+  @@index([user_id], map: "candidate_master_user_id_26720325_like")
+  @@index([display_id], map: "idx_candidate_display_id")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model candidate_master_groups {
+  id               BigInt           @id @default(autoincrement())
+  candidate_id     Int
+  group_id         Int
+  candidate_master candidate_master @relation(fields: [candidate_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "candidate_master_gro_candidate_id_9b255dd4_fk_candidate")
+  auth_group       auth_group       @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "candidate_master_groups_group_id_4a575fc4_fk_auth_group_id")
+
+  @@unique([candidate_id, group_id], map: "candidate_master_groups_candidate_id_group_id_4db16f53_uniq")
+  @@index([candidate_id], map: "candidate_master_groups_candidate_id_9b255dd4")
+  @@index([group_id], map: "candidate_master_groups_group_id_4a575fc4")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model candidate_master_user_permissions {
+  id               BigInt           @id @default(autoincrement())
+  candidate_id     Int
+  permission_id    Int
+  candidate_master candidate_master @relation(fields: [candidate_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "candidate_master_use_candidate_id_99ab6c35_fk_candidate")
+  auth_permission  auth_permission  @relation(fields: [permission_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "candidate_master_use_permission_id_6b7860ca_fk_auth_perm")
+
+  @@unique([candidate_id, permission_id], map: "candidate_master_user_pe_candidate_id_permission__af58e0c6_uniq")
+  @@index([candidate_id], map: "candidate_master_user_permissions_candidate_id_99ab6c35")
+  @@index([permission_id], map: "candidate_master_user_permissions_permission_id_6b7860ca")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model candidate_profile {
+  id                    Int              @id @default(autoincrement())
+  job_role              String           @db.VarChar(100)
+  headlines             String?          @db.VarChar(255)
+  summary               String?
+  skills                String?
+  experience_years      Int?
+  current_company       String?
+  highest_qualification String?
+  status                String?
+  photo_original_name   String?          @db.VarChar(255)
+  photo_url             String?          @db.VarChar(255)
+  resume_original_name  String?          @db.VarChar(255)
+  resume_url            String?          @db.VarChar(255)
+  notice_period         Int?
+  expected_salary       Int?
+  preferred_location    String?
+  is_active             Boolean
+  app_user_id           Int
+  profile_status        String?          @default("active") @db.VarChar(20)
+  is_layoff_affected    Boolean?         @default(false)
+  profile_completed     Boolean?         @default(false)
+  candidate_master      candidate_master @relation(fields: [app_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "candidate_profile_app_user_id_8838a282_fk_candidate_master_id")
+
+  @@index([app_user_id], map: "candidate_profile_app_user_id_8838a282")
+}
+
+model device_assignments {
+  id          BigInt    @id @default(autoincrement())
+  session_id  String?
+  member_id   String?
+  device_id   String?
+  slot_number Int?
+  assigned_at DateTime? @db.Timestamptz(6)
+
+  @@unique([session_id, member_id, device_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model django_admin_log {
+  id                  Int                  @id @default(autoincrement())
+  action_time         DateTime             @db.Timestamptz(6)
+  object_id           String?
+  object_repr         String               @db.VarChar(200)
+  action_flag         Int                  @db.SmallInt
+  change_message      String
+  content_type_id     Int?
+  user_id             Int
+  django_content_type django_content_type? @relation(fields: [content_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "django_admin_log_content_type_id_c4bce8eb_fk_django_co")
+  candidate_master    candidate_master     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "django_admin_log_user_id_c564eba6_fk_candidate_master_id")
+
+  @@index([content_type_id], map: "django_admin_log_content_type_id_c4bce8eb")
+  @@index([user_id], map: "django_admin_log_user_id_c564eba6")
+}
+
+model django_content_type {
+  id               Int                @id @default(autoincrement())
+  app_label        String             @db.VarChar(100)
+  model            String             @db.VarChar(100)
+  auth_permission  auth_permission[]
+  django_admin_log django_admin_log[]
+
+  @@unique([app_label, model], map: "django_content_type_app_label_model_76bd3d3b_uniq")
+}
+
+model django_migrations {
+  id      BigInt   @id @default(autoincrement())
+  app     String   @db.VarChar(255)
+  name    String   @db.VarChar(255)
+  applied DateTime @db.Timestamptz(6)
+}
+
+model django_session {
+  session_key  String   @id @db.VarChar(40)
+  session_data String
+  expire_date  DateTime @db.Timestamptz(6)
+
+  @@index([expire_date], map: "django_session_expire_date_a5c62663")
+  @@index([session_key], map: "django_session_session_key_c0390e0f_like")
+}
+
+model email_log {
+  id         Int      @id @default(autoincrement())
+  email_type String   @db.VarChar(40)
+  recipient  String?  @db.VarChar(254)
+  subject    String?  @db.VarChar(255)
+  success    Boolean
+  sent_at    DateTime @db.Timestamptz(6)
+
+  @@index([sent_at])
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model employer_notification {
+  id                Int              @id @default(autoincrement())
+  employer_id       Int
+  notification_type String           @db.VarChar(30)
+  title             String           @db.VarChar(255)
+  message           String
+  is_read           Boolean
+  created_at        DateTime         @db.Timestamptz(6)
+  employer_profile  employer_profile @relation(fields: [employer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "employer_notificatio_employer_id_7cdb3f89_fk_employer_")
+
+  @@index([employer_id], map: "employer_notification_employer_id_7cdb3f89")
+}
+
+model employer_profile {
+  id                          Int                          @id @default(autoincrement())
+  user_id                     Int?                         @unique
+  company_name                String?                      @db.VarChar(150)
+  designation                 String?                      @db.VarChar(100)
+  mobile                      String?                      @db.VarChar(15)
+  location                    String?                      @db.VarChar(100)
+  approved_by_admin           Boolean?                     @default(false)
+  verification_status         String?                      @default("unverified") @db.VarChar(20)
+  created_at                  DateTime?                    @default(now()) @db.Timestamp(6)
+  updated_at                  DateTime?                    @default(now()) @db.Timestamp(6)
+  employer_notification       employer_notification[]
+  candidate_master            candidate_master?            @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  employer_verification_token employer_verification_token?
+}
+
+model employer_verification_token {
+  id               Int               @id @default(autoincrement())
+  employer_id      Int?              @unique
+  token            String?           @unique @db.VarChar(64)
+  created_at       DateTime?         @default(now()) @db.Timestamptz(6)
+  is_used          Boolean?          @default(false)
+  employer_profile employer_profile? @relation(fields: [employer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model hr_ticks {
+  id         BigInt   @id @default(autoincrement())
+  session_id String?
+  member_id  String?
+  ts         BigInt?
+  hr_bpm     Int?
+  zone       Int?
+  pct_mhr    Float?   @db.Real
+  uv_points  Float?   @db.Real
+  calories   Float?   @db.Real
+  source     String?
+  synced_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([member_id, ts], map: "idx_hrticks_member")
+  @@index([session_id, ts], map: "idx_hrticks_session")
+}
+
+model job_application {
+  id                Int               @id @default(autoincrement())
+  job_id            Int?
+  candidate_id      Int?
+  status            String?           @db.VarChar(20)
+  applied_on        DateTime?         @default(now()) @db.Timestamp(6)
+  status_updated_at DateTime?         @db.Timestamp(6)
+  candidate_master  candidate_master? @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  job_master        job_master?       @relation(fields: [job_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([job_id, candidate_id])
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair {
+  id                   BigInt                 @id @default(autoincrement())
+  title                String                 @db.VarChar(255)
+  banner_url           String?                @db.VarChar(500)
+  banner_key           String?                @db.VarChar(500)
+  start_date           DateTime               @db.Timestamptz(6)
+  end_date             DateTime               @db.Timestamptz(6)
+  status               String                 @db.VarChar(20)
+  is_active            Boolean
+  company_email        String?                @db.VarChar(254)
+  export_sent          Boolean
+  created_by_id        Int?
+  created_at           DateTime               @db.Timestamptz(6)
+  updated_at           DateTime               @db.Timestamptz(6)
+  employer_request_id  BigInt?                @unique
+  candidate_master     candidate_master?      @relation(fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_created_by_id_78882010_fk_candidate_master_id")
+  job_fair_request     job_fair_request?      @relation(fields: [employer_request_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_employer_request_id_eedabff0_fk_job_fair_request_id")
+  job_fair_application job_fair_application[]
+  job_fair_company     job_fair_company[]
+  job_fair_position    job_fair_position[]
+  job_fair_question    job_fair_question[]
+
+  @@index([created_by_id], map: "job_fair_created_by_id_78882010")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair_answer {
+  id                   BigInt               @id @default(autoincrement())
+  application_id       BigInt
+  question_id          BigInt
+  answer_text          String?
+  job_fair_application job_fair_application @relation(fields: [application_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_answer_application_id_f12c2f91_fk")
+  job_fair_question    job_fair_question    @relation(fields: [question_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_answer_question_id_32a48b40_fk")
+
+  @@unique([application_id, question_id], map: "job_fair_answer_application_id_question_id_e41f1316_uniq")
+  @@index([application_id], map: "job_fair_answer_application_id_f12c2f91")
+  @@index([question_id], map: "job_fair_answer_question_id_32a48b40")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair_application {
+  id                    BigInt             @id @default(autoincrement())
+  job_fair_id           BigInt
+  position_id           BigInt?
+  first_name            String             @db.VarChar(100)
+  last_name             String             @db.VarChar(100)
+  email                 String             @db.VarChar(254)
+  phone                 String?            @db.VarChar(20)
+  location              String?            @db.VarChar(100)
+  address               String?
+  current_job_title     String?            @db.VarChar(150)
+  professional_summary  String?
+  is_layoff_affected    Boolean
+  skills                String?            @db.VarChar(500)
+  experience_years      Int?
+  current_company       String?            @db.VarChar(150)
+  highest_qualification String?            @db.VarChar(100)
+  notice_period_days    Int?
+  expected_salary       Int?
+  resume_url            String?            @db.VarChar(500)
+  resume_key            String?            @db.VarChar(500)
+  resume_original_name  String?            @db.VarChar(255)
+  submitted_at          DateTime           @db.Timestamptz(6)
+  photo_url             String?            @db.VarChar(500)
+  photo_key             String?            @db.VarChar(500)
+  job_fair_answer       job_fair_answer[]
+  job_fair              job_fair           @relation(fields: [job_fair_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_application_job_fair_id_699626d4_fk")
+  job_fair_position     job_fair_position? @relation(fields: [position_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_application_position_id_85ad9155_fk")
+
+  @@unique([job_fair_id, email], map: "job_fair_application_job_fair_id_email_f435d1a9_uniq")
+  @@index([job_fair_id], map: "job_fair_application_job_fair_id_699626d4")
+  @@index([position_id], map: "job_fair_application_position_id_85ad9155")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair_company {
+  id                BigInt              @id @default(autoincrement())
+  job_fair_id       BigInt
+  name              String              @db.VarChar(255)
+  logo_url          String?             @db.VarChar(500)
+  logo_key          String?             @db.VarChar(500)
+  address           String?
+  about             String?
+  website           String?             @db.VarChar(255)
+  order             Int
+  job_fair          job_fair            @relation(fields: [job_fair_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_company_job_fair_id_be1f3b5e_fk")
+  job_fair_position job_fair_position[]
+
+  @@index([job_fair_id], map: "job_fair_company_job_fair_id_be1f3b5e")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair_position {
+  id                   BigInt                 @id @default(autoincrement())
+  job_fair_id          BigInt
+  company_id           BigInt?
+  job_title            String                 @db.VarChar(255)
+  vacancy_count        Int
+  order                Int
+  job_fair_application job_fair_application[]
+  job_fair_company     job_fair_company?      @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_position_company_id_74c4c13c_fk")
+  job_fair             job_fair               @relation(fields: [job_fair_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_position_job_fair_id_24ea5b28_fk")
+
+  @@index([company_id], map: "job_fair_position_company_id_74c4c13c")
+  @@index([job_fair_id], map: "job_fair_position_job_fair_id_24ea5b28")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair_question {
+  id              BigInt            @id @default(autoincrement())
+  job_fair_id     BigInt
+  field_key       String            @db.VarChar(100)
+  label           String            @db.VarChar(255)
+  field_type      String            @db.VarChar(20)
+  options         Json?
+  is_required     Boolean
+  is_default      Boolean
+  is_enabled      Boolean
+  order           Int
+  job_fair_answer job_fair_answer[]
+  job_fair        job_fair          @relation(fields: [job_fair_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_question_job_fair_id_d790039f_fk")
+
+  @@unique([job_fair_id, field_key], map: "job_fair_question_job_fair_id_field_key_0ff3e662_uniq")
+  @@index([job_fair_id], map: "job_fair_question_job_fair_id_d790039f")
+}
+
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model job_fair_request {
+  id                                                                 BigInt            @id @default(autoincrement())
+  title                                                              String            @db.VarChar(255)
+  description                                                        String?
+  banner_url                                                         String?           @db.VarChar(500)
+  banner_key                                                         String?           @db.VarChar(500)
+  preferred_start                                                    DateTime?         @db.Date
+  preferred_end                                                      DateTime?         @db.Date
+  company_name                                                       String            @db.VarChar(255)
+  company_email                                                      String            @db.VarChar(254)
+  company_address                                                    String?
+  company_website                                                    String?           @db.VarChar(255)
+  company_about                                                      String?
+  positions                                                          Json
+  custom_fields                                                      Json
+  field_config                                                       Json
+  status                                                             String            @db.VarChar(20)
+  admin_note                                                         String?
+  reviewed_at                                                        DateTime?         @db.Timestamptz(6)
+  submitted_at                                                       DateTime          @db.Timestamptz(6)
+  updated_at                                                         DateTime          @db.Timestamptz(6)
+  employer_id                                                        Int
+  reviewed_by_id                                                     Int?
+  job_fair                                                           job_fair?
+  candidate_master_job_fair_request_employer_idTocandidate_master    candidate_master  @relation("job_fair_request_employer_idTocandidate_master", fields: [employer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_request_employer_id_35360342_fk_candidate_master_id")
+  candidate_master_job_fair_request_reviewed_by_idTocandidate_master candidate_master? @relation("job_fair_request_reviewed_by_idTocandidate_master", fields: [reviewed_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "job_fair_request_reviewed_by_id_863caae4_fk_candidate_master_id")
+
+  @@index([employer_id], map: "job_fair_request_employer_id_35360342")
+  @@index([reviewed_by_id], map: "job_fair_request_reviewed_by_id_863caae4")
+}
+
+model job_id_sequence {
+  id               Int               @id @default(autoincrement())
+  employer_id      Int?              @unique
+  prefix           String?           @db.VarChar(20)
+  last_sequence    Int?              @default(0)
+  candidate_master candidate_master? @relation(fields: [employer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model job_master {
+  id               Int               @id @default(autoincrement())
+  job_id           String?           @unique @db.VarChar(30)
+  employer_id      Int?
+  title            String?           @db.VarChar(255)
+  location         String?           @db.VarChar(100)
+  employment_type  String?           @db.VarChar(20)
+  work_mode        String?           @db.VarChar(20)
+  min_experience   Int?
+  max_experience   Int?
+  core_skills      String?
+  description      String?
+  requirements     String?
+  job_status       String?           @db.VarChar(20)
+  is_active        Boolean?          @default(false)
+  created_at       DateTime?         @db.Timestamp(6)
+  updated_at       DateTime?         @db.Timestamp(6)
+  is_published     Boolean           @default(false)
+  job_application  job_application[]
+  candidate_master candidate_master? @relation(fields: [employer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  notification     notification[]
+}
+
+model notification {
+  id                Int               @id @default(autoincrement())
+  candidate_id      Int?
+  job_id            Int?
+  notification_type String?           @db.VarChar(20)
+  title             String?           @db.VarChar(255)
+  message           String?
+  is_read           Boolean?          @default(false)
+  created_at        DateTime?         @default(now()) @db.Timestamp(6)
+  candidate_master  candidate_master? @relation(fields: [candidate_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  job_master        job_master?       @relation(fields: [job_id], references: [id], onUpdate: NoAction)
+}
+
+model push_tokens {
+  member_id  String   @id
+  expo_token String
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model resume_update_task {
+  id                       BigInt           @id @default(autoincrement())
+  new_resume_key           String?          @db.VarChar(512)
+  new_resume_original_name String?          @db.VarChar(255)
+  old_resume_key           String?          @db.VarChar(512)
+  status                   String           @db.VarChar(20)
+  error_msg                String?
+  retry_count              Int              @db.SmallInt
+  created_at               DateTime         @db.Timestamptz(6)
+  updated_at               DateTime         @db.Timestamptz(6)
+  completed_at             DateTime?        @db.Timestamptz(6)
+  candidate_id             Int
+  candidate_master         candidate_master @relation(fields: [candidate_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "resume_update_task_candidate_id_89ee2bae_fk_candidate_master_id")
+
+  @@index([candidate_id], map: "resume_update_task_candidate_id_89ee2bae")
+  @@index([candidate_id, status], map: "rut_candidate_status_idx")
+}
+
+model scheduled_sessions {
+  id          String    @id
+  name        String?
+  date        String?
+  start_time  String?
+  end_time    String?
+  notes       String?
+  trainer_id  String?
+  assignments Json?
+  created_at  DateTime? @db.Timestamptz(6)
+  synced_at   DateTime  @default(now()) @db.Timestamptz(6)
+}
+
+model session_athlete_summary {
+  id              BigInt  @id @default(autoincrement())
+  session_id      String
+  member_id       String?
+  athlete_label   String?
+  uv_score        Float?  @db.Real
+  sweat_points    Float?  @db.Real
+  recovery_points Float?  @db.Real
+  recovery_grade  String?
+  avg_hr          Int?
+  peak_hr         Int?
+  avg_pct_mhr     Float?  @db.Real
+  net_calories    Float?  @db.Real
+  epoc_calories   Float?  @db.Real
+  epoc_hours      Float?  @db.Real
+  zone0_seconds   Int?    @default(0)
+  zone1_seconds   Int?    @default(0)
+  zone2_seconds   Int?    @default(0)
+  zone3_seconds   Int?    @default(0)
+  zone4_seconds   Int?    @default(0)
+  zone5_seconds   Int?    @default(0)
+  dropout_seconds Int?    @default(0)
+  final_rank      Int?
+  sessions        Session @relation(fields: [session_id], references: [session_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([session_id, member_id])
+  @@index([member_id], map: "idx_sas_member")
+}
+
+model session_packages {
+  session_id   String   @id
+  package_json Json
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+  sessions     Session  @relation(fields: [session_id], references: [session_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model smtp_configuration {
+  id         BigInt   @id @default(autoincrement())
+  name       String   @unique @db.VarChar(100)
+  host       String   @db.VarChar(255)
+  port       Int
+  username   String   @db.VarChar(255)
+  password   String   @db.VarChar(255)
+  use_tls    Boolean
+  use_ssl    Boolean
+  from_email String   @db.VarChar(254)
+  is_active  Boolean
+  created_at DateTime @db.Timestamptz(6)
+  updated_at DateTime @db.Timestamptz(6)
+
+  @@index([name], map: "smtp_configuration_name_e8df19f4_like")
+}
+
+

@@ -1,0 +1,721 @@
+// UV Active Cloud API — Data Model
+// This is the sole system of record. No local SQLite fallback, no hub.
+// Delete-semantics rule enforced throughout: no hard deletes on members
+// or sessions — status flags / closed timestamps / anonymization only.
+// The exception is `Gym`, which allows a hard delete but ONLY when it
+// has zero currently-assigned members (enforced in GymsService).
+//
+// Anonymize-on-request, never hard-delete (spec §9) is the resolved
+// stance on the retain-forever vs erasure-request conflict — flagged
+// as an engineering default pending legal counsel confirmation, not a
+// legal opinion.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────
+
+enum GymStatus {
+  active
+  suspended
+  deleted
+}
+
+enum MemberStatus {
+  active
+  suspended
+  pending_transfer
+}
+
+enum Sex {
+  male
+  female
+  other
+}
+
+enum TrainerStatus {
+  active
+  suspended
+}
+
+enum StaffRole {
+  trainer
+  branch_manager
+}
+
+enum AdminRole {
+  super_admin
+  support
+}
+
+enum SessionStatus {
+  scheduled
+  in_progress
+  completed
+  cancelled
+}
+
+enum AttendanceStatus {
+  enrolled
+  attended
+  no_show
+}
+
+enum CancelledByType {
+  trainer
+  branch
+  admin
+  system
+}
+
+enum TransferStatus {
+  pending
+  accepted
+  declined
+  expired
+}
+
+enum ActorType {
+  member
+  staff
+  admin
+  system
+}
+
+enum NotificationChannel {
+  push
+  sms
+  email
+}
+
+enum NotificationStatus {
+  pending
+  sent
+  failed
+}
+
+enum AuthRealm {
+  member
+  staff
+  admin
+}
+
+enum ResetAccountType {
+  staff
+  admin
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Core tenancy
+// ─────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sensor registry — the physical BLE strap inventory at a gym. Distinct
+// from SensorReading (a per-second HR sample during a live session):
+// this is "which hardware exists", used to cap session enrollment at
+// the number of slots actually available (spec: "already added sensors
+// slots if 6 they can add only 6 members above that not permits").
+// ─────────────────────────────────────────────────────────────────────────
+
+model Sensor {
+  id       String  @id @default(uuid())
+  gymId    String  @map("gym_id")
+  gym      Gym     @relation(fields: [gymId], references: [id])
+  name     String
+  sensorId String  @map("sensor_id")
+  note     String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([gymId, sensorId])
+  @@index([gymId])
+  @@map("sensors")
+}
+
+model Gym {
+  id           String    @id @default(uuid())
+  name         String
+  address      String?
+  // Free-text area/city/locality — distinct from the street `address`
+  // above. Shown on the Admin Gyms list and editable from the Branch
+  // Portal Settings screen (spec: gym creation + branch settings).
+  location     String?
+  // The gym's own front-desk line — distinct from `ownerContact`
+  // (historically a free-text contact blob) and from the branch
+  // manager's personal phone on their Trainer row.
+  gymPhone     String?   @map("gym_phone")
+  ownerContact String?   @map("owner_contact")
+  contactEmail String?   @map("contact_email")
+  logoUrl      String?   @map("logo_url")
+  status       GymStatus @default(active)
+  memberLimit  Int       @map("member_limit")
+  // Bumped on every suspend/reactivate. Staff JWTs carry the value that
+  // was current at login; every authenticated request re-checks it
+  // against this column. Mismatch = instant logout, no waiting for the
+  // 15-minute access-token TTL to expire.
+  tokenVersion Int       @default(0) @map("token_version")
+
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  trainers          Trainer[]
+  sessions          Session[]
+  sensors           Sensor[]
+  sensorTelemetry   SensorTelemetry[]
+  memberHistory     MemberGymHistory[]
+  transfersFrom     TransferRequest[]  @relation("TransferFromGym")
+  transfersTo       TransferRequest[]  @relation("TransferToGym")
+  currentMembers    Member[]           @relation("CurrentGym")
+
+  @@map("gyms")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Members — one row per human, forever (anonymized, never deleted)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Member {
+  id             String       @id @default(uuid())
+  memberCode     String       @unique @map("member_code") // UVA-XXXXXX
+  pinHash        String?      @map("pin_hash")             // null once anonymized — login disabled
+  // Web/portal login alternative to memberCode+PIN (memberCode+PIN
+  // stays the QR/kiosk-facing identity — see MemberLoginDto). Generated
+  // server-side at registration alongside the PIN, delivered once by
+  // email, never stored or shown in plaintext again. Null until the
+  // member has an email on file (email is optional on this model, but
+  // required by RegisterMemberDto going forward).
+  passwordHash   String?      @map("password_hash")
+  name           String
+  phone          String?
+  email          String?      @unique
+  dob            DateTime?
+  // Bio fields captured at registration (both Admin Panel and Branch
+  // Portal member-creation forms) — used for BMI/max-HR calc and shown
+  // on the member detail screen. All mandatory in the create forms;
+  // nullable here only because pre-existing members predate this.
+  sex            Sex?
+  ageYears       Int?         @map("age_years")
+  heightCm       Float?       @map("height_cm")
+  weightKg       Float?       @map("weight_kg")
+  restingHr      Int?         @map("resting_hr")
+  photoUrl       String?      @map("photo_url")
+  status         MemberStatus @default(active)
+  currentGymId   String?      @map("current_gym_id")
+  currentGym     Gym?         @relation("CurrentGym", fields: [currentGymId], references: [id])
+
+  // Expo push token for the Member App — registered by the app right
+  // after login (see members.controller.ts's push-token endpoint), so
+  // every notify() call for this member can also reach their phone as
+  // a real system push, not just the in-app bell. Null until the app
+  // has actually asked for and been granted notification permission.
+  pushToken      String?      @map("push_token")
+
+  failedPinAttempts Int       @default(0) @map("failed_pin_attempts")
+  lockedUntil       DateTime? @map("locked_until")
+
+  isAnonymized   Boolean   @default(false) @map("is_anonymized")
+  anonymizedAt   DateTime? @map("anonymized_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  gymHistory        MemberGymHistory[]
+  sessionMembers    SessionMember[]
+  transferRequests  TransferRequest[]
+  refreshTokens     RefreshToken[]
+  consents          Consent[]
+  pinResetRequests  MemberPinReset[]
+
+  @@index([currentGymId])
+  @@map("members")
+}
+
+// Append-only. Never delete or edit a closed row — a gym switch closes
+// the previous row (sets leftAt) and opens a new one in the same
+// transaction. Past session data always stays linked to the member
+// regardless of their current gym.
+model MemberGymHistory {
+  id             String    @id @default(uuid())
+  memberId       String    @map("member_id")
+  member         Member    @relation(fields: [memberId], references: [id])
+  gymId          String    @map("gym_id")
+  gym            Gym       @relation(fields: [gymId], references: [id])
+  joinedAt       DateTime  @default(now()) @map("joined_at")
+  leftAt         DateTime? @map("left_at")
+  releasedByType String?   @map("released_by_type") // 'branch' | 'admin' | 'member_accepted_transfer'
+  releasedById   String?   @map("released_by_id")
+  reason         String?
+
+  @@index([memberId])
+  @@index([gymId])
+  @@map("member_gym_history")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Consent capture — required at registration since HR/biometric data is
+// being collected (spec §10). Not a decorative checkbox: versioned +
+// timestamped + IP-logged.
+// ─────────────────────────────────────────────────────────────────────────
+
+model Consent {
+  id         String   @id @default(uuid())
+  memberId   String   @map("member_id")
+  member     Member   @relation(fields: [memberId], references: [id])
+  version    String
+  acceptedAt DateTime @default(now()) @map("accepted_at")
+  ipAddress  String?  @map("ip_address")
+
+  @@index([memberId])
+  @@map("consents")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Staff (trainers + branch managers)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Trainer {
+  id           String        @id @default(uuid())
+  gymId        String        @map("gym_id")
+  gym          Gym           @relation(fields: [gymId], references: [id])
+  name         String
+  email        String        @unique
+  passwordHash String        @map("password_hash")
+  phone        String?
+  photoUrl     String?       @map("photo_url")
+  role         StaffRole     @default(trainer)
+  status       TrainerStatus @default(active)
+  // Expo push token for the Trainer App — same purpose as
+  // Member.pushToken above (registered right after login).
+  pushToken    String?       @map("push_token")
+  // "Delete" from the Branch Portal's Trainer tab sets this rather than
+  // a hard DELETE — past sessions still hold a FK to this row (needed
+  // for their own history/leaderboard), so the row has to stay. Removed
+  // trainers are filtered out of every roster/list by default.
+  removedAt    DateTime?     @map("removed_at")
+
+  // Mandatory 2FA for the staff realm, mirroring the admin realm (see
+  // Admin.totpSecret/totpEnabled). Every staff login — whether the first
+  // factor was password or Google — must clear this second factor.
+  totpSecret  String?  @map("totp_secret")
+  totpEnabled Boolean  @default(false) @map("totp_enabled")
+
+  // Optional alternate first factor. Google can only ever be LINKED to
+  // an account that already exists (branch staff are provisioned by
+  // Admin/branch-manager, never self-signed-up) — set the first time a
+  // matching-email account signs in with Google, never used to create
+  // a brand-new account on its own.
+  googleId String? @unique @map("google_id")
+
+  // Set true for the branch-manager account auto-created alongside its
+  // Gym (see GymsService.create). Never true for trainer-role rows.
+  isPrimaryManager Boolean @default(false) @map("is_primary_manager")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  sessions      Session[]
+  refreshTokens RefreshToken[]
+  backupCodes   StaffBackupCode[]
+
+  @@index([gymId])
+  @@map("trainers")
+}
+
+// 10 single-use backup codes issued at staff 2FA setup, shown once —
+// same shape and handling as AdminBackupCode.
+model StaffBackupCode {
+  id        String    @id @default(uuid())
+  trainerId String    @map("trainer_id")
+  trainer   Trainer   @relation(fields: [trainerId], references: [id])
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([trainerId])
+  @@map("staff_backup_codes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sessions & bookings
+// ─────────────────────────────────────────────────────────────────────────
+
+model Session {
+  id          String        @id @default(uuid())
+  gymId       String        @map("gym_id")
+  gym         Gym           @relation(fields: [gymId], references: [id])
+  trainerId   String        @map("trainer_id")
+  trainer     Trainer       @relation(fields: [trainerId], references: [id])
+  name        String
+  capacity    Int           @default(30)
+  status      SessionStatus @default(scheduled)
+  startedAt   DateTime?     @map("started_at")
+  endedAt     DateTime?     @map("ended_at")
+  scheduledAt DateTime?     @map("scheduled_at")
+  // Planned end time, purely for calendar display/planning — distinct
+  // from `endedAt`, which is set when the trainer actually ends the
+  // live session and may not match what was originally scheduled.
+  scheduledEndAt DateTime?  @map("scheduled_end_at")
+
+  cancelledReason  String?          @map("cancelled_reason")
+  cancelledByType  CancelledByType? @map("cancelled_by_type")
+  cancelledById    String?          @map("cancelled_by_id")
+
+  // Set true when the assigned trainer is suspended while this session
+  // is still scheduled in the future — surfaced prominently on the
+  // Branch Portal dashboard, never a silent background flag (spec §8).
+  needsReassignment Boolean @default(false) @map("needs_reassignment")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members SessionMember[]
+
+  @@index([gymId, scheduledAt])
+  @@index([trainerId])
+  @@index([needsReassignment])
+  @@map("sessions")
+}
+
+// One row per member per session. UNIQUE(session_id, member_id) is the
+// second line of defense for capacity safety — the first is the row
+// lock taken on the parent `sessions` row inside the same transaction
+// (see SessionsService.enrollMember). session-end is an idempotent
+// upsert keyed on this same composite, so a retried offline-sync
+// payload can never double-write results.
+model SessionMember {
+  id           String            @id @default(uuid())
+  sessionId    String            @map("session_id")
+  session      Session           @relation(fields: [sessionId], references: [id])
+  memberId     String            @map("member_id")
+  member       Member            @relation(fields: [memberId], references: [id])
+  enrolledAt   DateTime          @default(now()) @map("enrolled_at")
+  enrolledBy   String            @map("enrolled_by") // 'branch' | 'trainer' | 'member_self_book'
+  attendance   AttendanceStatus  @default(enrolled)
+
+  avgHr        Int?     @map("avg_hr")
+  maxHr        Int?     @map("max_hr")
+  calories     Float?
+  zoneMinutes  Json?    @map("zone_minutes")
+  score        Float?
+
+  // Downsampled BPM graph data (~200-300 points via LTTB), computed
+  // once from the raw sensor_readings log at session-end and stored
+  // here as columnar { t: number[], hr: number[] } — see
+  // chart-downsample.util.ts. This is what getAthleteTicks/
+  // getMemberTicks read from instead of re-aggregating the raw
+  // per-second table on every graph view. Null for rows written
+  // before this existed, or for a member with no ingested readings
+  // at all; callers fall back to live-downsampling from
+  // sensor_readings in that case.
+  chartSeries  Json?    @map("chart_series")
+
+  // Rich post-workout results (spec §7 "Post-Workout Summary"), sent by
+  // the Trainer App's formula engine at session end alongside the
+  // aggregates above. Null on rows written before these columns existed
+  // (or when a session was ended without a recovery challenge).
+  sweatPoints    Float?  @map("sweat_points")
+  recoveryPoints Float?  @map("recovery_points")
+  recoveryGrade  String? @map("recovery_grade")
+  epocCalories   Float?  @map("epoc_calories")
+  epocHours      Float?  @map("epoc_hours")
+  avgPctMhr      Float?  @map("avg_pct_mhr")
+  maxPctMhr      Float?  @map("max_pct_mhr")
+  // Rank within this session, highest UV score first — assigned by the
+  // Trainer App at session end and surfaced on every leaderboard.
+  finalRank      Int?     @map("final_rank")
+  // Interval / target-zone consistency % — average of the per-interval
+  // consistency scores tracked by the Trainer App's accumulator
+  // (formula-engine/session.ts), part of the "Post-Workout Summary —
+  // Data Output Specification" spec fields alongside sweatPoints etc.
+  // Null when the session had no target-zone intervals to score.
+  consistencyPct Float?   @map("consistency_pct")
+
+  resultSubmittedAt DateTime? @map("result_submitted_at")
+  // When this result actually landed from the trainer app's offline
+  // outbox — distinct from resultSubmittedAt so a late/retried sync can
+  // be distinguished from an on-time one if that's ever useful for
+  // debugging offline reliability.
+  syncedAt          DateTime? @map("synced_at")
+
+  readings SensorReading[]
+
+  @@unique([sessionId, memberId])
+  @@map("session_members")
+}
+
+// Optional raw HR stream for full BPM graphs, not just per-session
+// aggregates. Populated by the Trainer App's BLE layer if/when a full
+// graph view is built — the aggregate fields on SessionMember are
+// always sufficient on their own for scoring.
+//
+// Storage note: at 10 sessions/day x 10 members x ~45min this table
+// grows by roughly 250-300k rows/day, so it is NOT kept forever. Once
+// a session ends, SessionsService.end()/recalculateMember() downsample
+// this into SessionMember.chartSeries (~200-300 pts) for graph reads,
+// and SensorReadingsRetentionJob (sensor-readings-retention.job.ts)
+// deletes the raw rows for a session once its chartSeries has been
+// safely persisted for RETENTION_DAYS — see that file for the window.
+model SensorReading {
+  id              String        @id @default(uuid())
+  sessionMemberId String        @map("session_member_id")
+  sessionMember   SessionMember @relation(fields: [sessionMemberId], references: [id])
+  ts              DateTime
+  hr              Int
+  rrMs            Int?          @map("rr_ms")
+  // True when this row was synthesized by the Trainer App's sensor
+  // watchdog gap-fill (>15s dropout) rather than read off the sensor.
+  // Ops/QA auditability only — every consumer (leaderboards, member
+  // summaries, portal graphs) treats interpolated and real rows
+  // identically; this column exists so a disputed score can be traced
+  // back to how much of it was measured vs estimated, nothing more.
+  interpolated    Boolean       @default(false)
+
+  @@index([sessionMemberId, ts])
+  @@map("sensor_readings")
+}
+
+// Live/last-known telemetry for a physical sensor, independent of any
+// one session — this is what powers the pre-session connectivity
+// dashboard and the branch/admin portals' "sensor health" views.
+// Deliberately NOT session-scoped: a trainer checking sensors before
+// a session hasn't started one yet, and a battery reading is a
+// property of the physical device, not of a session.
+model SensorTelemetry {
+  sensorId       String   @id @map("sensor_id") // matches Sensor.sensorId (the human-entered label), not Sensor.id
+  gymId          String   @map("gym_id")
+  gym            Gym      @relation(fields: [gymId], references: [id])
+  batteryPct     Int?     @map("battery_pct") // 0-100, null if never read this power cycle
+  lastSeenAt     DateTime @map("last_seen_at")
+  // 'connected' | 'reconnecting' | 'disconnected' — mirrors the
+  // Trainer App's watchdog states, written on every status change
+  // (not every tick) to keep this table cheap to upsert.
+  connectionState String  @default("disconnected") @map("connection_state")
+  lastSessionId  String?  @map("last_session_id")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([gymId])
+  @@map("sensor_telemetry")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Transfer workflow (consent-based, branch- or admin-initiated)
+// ─────────────────────────────────────────────────────────────────────────
+
+model TransferRequest {
+  id           String         @id @default(uuid())
+  memberId     String         @map("member_id")
+  member       Member         @relation(fields: [memberId], references: [id])
+  fromGymId    String?        @map("from_gym_id")
+  fromGym      Gym?           @relation("TransferFromGym", fields: [fromGymId], references: [id])
+  toGymId      String         @map("to_gym_id")
+  toGym        Gym            @relation("TransferToGym", fields: [toGymId], references: [id])
+  requestedByType String      @map("requested_by_type") // 'branch' | 'admin'
+  requestedById   String?     @map("requested_by_id")
+  status       TransferStatus @default(pending)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  respondedAt  DateTime?      @map("responded_at")
+  expiresAt    DateTime       @map("expires_at")
+
+  @@index([memberId, status])
+  @@index([toGymId, status])
+  @@map("transfer_requests")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Admin realm
+// ─────────────────────────────────────────────────────────────────────────
+
+model Admin {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         AdminRole @default(support)
+  totpSecret   String?   @map("totp_secret") // set on 2FA setup
+  totpEnabled  Boolean   @default(false) @map("totp_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  refreshTokens RefreshToken[]
+  backupCodes   AdminBackupCode[]
+
+  @@map("admins")
+}
+
+// 10 single-use backup codes issued at 2FA setup, shown once. Each is
+// stored hashed and consumed (used_at set) on first successful use —
+// never reusable, never re-displayed (spec §4.3).
+model AdminBackupCode {
+  id        String    @id @default(uuid())
+  adminId   String    @map("admin_id")
+  admin     Admin     @relation(fields: [adminId], references: [id])
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([adminId])
+  @@map("admin_backup_codes")
+}
+
+// Single-use, short-lived reset links for staff and admin PASSWORD
+// reset (distinct from admin 2FA reset, and distinct from member PIN
+// reset which is OTP-based — see MemberPinReset below).
+model PasswordResetToken {
+  id          String           @id @default(uuid())
+  accountType ResetAccountType @map("account_type")
+  accountId   String           @map("account_id")
+  tokenHash   String           @unique @map("token_hash")
+  expiresAt   DateTime         @map("expires_at")
+  usedAt      DateTime?        @map("used_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  @@map("password_reset_tokens")
+}
+
+// Member PIN self-recovery — OTP delivered to the registered phone/
+// email, distinct from a staff-triggered reset (spec §4.1). If the
+// member can't receive the OTP at all, recovery falls back to the
+// staff-triggered path in MembersService.resetPin — this table is only
+// for the self-service OTP flow.
+model MemberPinReset {
+  id        String    @id @default(uuid())
+  memberId  String    @map("member_id")
+  member    Member    @relation(fields: [memberId], references: [id])
+  otpHash   String    @map("otp_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([memberId])
+  @@map("member_pin_resets")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-realm infra: refresh tokens, audit log, notifications
+// ─────────────────────────────────────────────────────────────────────────
+
+// Device-scoped refresh tokens so logout/PIN-reset/password-reset can
+// revoke exactly one device's session rather than nothing (self-signed
+// short-lived access JWTs alone can't be revoked before they expire).
+model RefreshToken {
+  id         String    @id @default(uuid())
+  realm      AuthRealm
+  tokenHash  String    @unique @map("token_hash")
+  deviceId   String?   @map("device_id")
+  memberId   String?   @map("member_id")
+  member     Member?   @relation(fields: [memberId], references: [id])
+  trainerId  String?   @map("trainer_id")
+  trainer    Trainer?  @relation(fields: [trainerId], references: [id])
+  adminId    String?   @map("admin_id")
+  admin      Admin?    @relation(fields: [adminId], references: [id])
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([memberId])
+  @@index([trainerId])
+  @@index([adminId])
+  @@map("refresh_tokens")
+}
+
+// Append-only, platform-wide. DB grants for the API's runtime role
+// should permit INSERT + SELECT only on this table — no UPDATE/DELETE —
+// configured in infra (see README "Least-privilege DB role"); Prisma
+// migrations alone can't express GRANT statements, so infra/db-grants.sql
+// carries this and must be re-applied after every `migrate deploy`.
+model AuditLog {
+  id         String    @id @default(uuid())
+  actorType  ActorType @map("actor_type")
+  actorId    String?   @map("actor_id")
+  action     String
+  targetType String    @map("target_type")
+  targetId   String?   @map("target_id")
+  payload    Json?
+  ip         String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([targetType, targetId])
+  @@index([actorType, actorId])
+  @@map("audit_log")
+}
+
+// Doubles as the addressable in-app notification center (recipientType/
+// recipientId/type/title/body/data/readAt) AND the outbound delivery
+// log (channel/status/attempts/lastError) for the subset that also go
+// out over push/SMS/email — one row, one table, per spec §5/§11 rather
+// than two separate concerns drifting apart.
+model Notification {
+  id            String               @id @default(uuid())
+  recipientType String               @map("recipient_type") // 'member' | 'trainer' | 'branch' | 'admin'
+  recipientId   String               @map("recipient_id")
+  type          String               // e.g. 'credentials_delivery' | 'transfer_created' | 'session_cancelled' | 'reassignment_needed' | 'session_reminder' | 'result_ready'
+  title         String?
+  body          String
+  data          Json?
+  readAt        DateTime?            @map("read_at")
+
+  // External delivery, only populated when this notification is also
+  // meant to go out over push/SMS/email (credential delivery always is;
+  // an in-app-only dashboard alert like reassignment_needed is not).
+  channel   NotificationChannel?
+  recipientAddress String?          @map("recipient_address") // phone/email/push token for delivery
+  status    NotificationStatus      @default(pending)
+  attempts  Int                     @default(0)
+  lastError String?                 @map("last_error")
+  sentAt    DateTime?               @map("sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Job-claim lease for the retry cron. Unused while this deployment
+  // runs a single instance (the DO minimum-instance target) — a lone
+  // process's own cron tick can't race itself. Kept ready so that IF
+  // this is ever scaled to >1 instance, NotificationsService.retryPending
+  // can start using it (updateMany WHERE claimedAt IS NULL OR stale)
+  // instead of every replica's 5-minute tick re-sending the same
+  // pending notification. See ARCHITECTURE.md "Control background work".
+  claimedAt DateTime? @map("claimed_at")
+
+  @@index([recipientType, recipientId, readAt])
+  @@index([status])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Rate limiting (Postgres-backed — no Redis dependency)
+// ─────────────────────────────────────────────────────────────────────────
+
+// Shared atomic counter table backing BOTH the global request throttler
+// (common/utils/pg-throttler-storage.ts, wired into ThrottlerModule in
+// app.module.ts) and the stricter per-realm login limiter
+// (common/utils/rate-limit.service.ts). One small table, two thin
+// consumers with different key prefixes ("throttle:" / "login:") — this
+// is what makes the limit hold correctly across every replica/worker
+// behind the load balancer without standing up a separate Redis
+// instance: replicas share the same Postgres the app already talks to,
+// and the single-statement UPSERT in both consumers keeps the
+// check-and-increment atomic per key even with concurrent replicas
+// racing the same key at once (see pg-throttler-storage.ts for the
+// exact statement and why it's safe without an explicit transaction).
+model RateLimitCounter {
+  key             String    @id
+  count           Int       @default(0)
+  windowExpiresAt DateTime  @map("window_expires_at")
+  blockedUntil    DateTime? @map("blocked_until")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Swept periodically by rate-limit-sweep.job.ts so this table doesn't
+  // grow unboundedly with one row per (identifier, IP) pair ever seen —
+  // safe to delete any row whose window AND block have both expired.
+  @@index([windowExpiresAt])
+  @@map("rate_limit_counters")
+}

@@ -1,0 +1,19 @@
+# Local development only — for staging/production use a managed
+# Postgres (DigitalOcean/Neon/etc). No Redis service: rate limiting is
+# Postgres-backed (see src/common/utils/pg-rate-limit.util.ts) and this
+# is the only datastore the API needs, in dev or in production.
+version: "3.8"
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: uvactive
+      POSTGRES_PASSWORD: uvactive_dev_only
+      POSTGRES_DB: uvactive
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

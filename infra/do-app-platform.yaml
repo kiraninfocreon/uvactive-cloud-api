@@ -1,0 +1,133 @@
+# DigitalOcean App Platform spec for the consolidated UV Active stack.
+#
+# Shape: ONE backend service (Admin + Branch + Trainer + Member, via
+# SERVICE_SCOPE=all) + TWO static sites (Admin Panel, Branch Portal) +
+# ONE managed dev-tier Postgres. This is the minimum-instance layout
+# the architecture doc's own "Target design: one modular API" section
+# describes — sized at 1GB/1vCPU per the doc's own note that 512MiB is
+# risky for a full NestJS/Prisma process.
+#
+# Deploy with: doctl apps create --spec infra/do-app-platform.yaml
+# (after pushing this repo, the admin-panel repo and branch-portal repo
+# to GitHub/GitLab — update the `repo:` fields below first).
+#
+# Trainer App and Member App are NOT part of this spec — they're Expo/
+# React Native mobile builds that call this backend's public URL
+# directly (see each app's .env — EXPO_PUBLIC_API_BASE_URL /
+# API_BASE_URL), they don't deploy to App Platform.
+
+name: uvactive
+region: nyc
+
+databases:
+  - name: uvactive-db
+    engine: PG
+    version: "16"
+    production: false # dev tier for the initial single-instance rollout — see note below
+    # NOTE: "production: false" gives DO's smallest managed Postgres
+    # tier (shared CPU, 1GB), which is fine for the testing/first-
+    # release phase this spec targets. Flip to true (and pick a sized
+    # plan) once member/session volume and backup requirements are
+    # confirmed — the architecture doc explicitly calls out expanding
+    # hosting as active users, retained sensor data and backups grow.
+
+services:
+  - name: backend
+    github:
+      repo: your-org/uvactive-unified-backend # <-- update
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    source_dir: /
+    http_port: 8080
+    instance_count: 1 # single instance by design — see ARCHITECTURE.md
+    instance_size_slug: apps-s-1vcpu-1gb # 1 vCPU / 1GB — doc's safe minimum for NestJS+Prisma
+    health_check:
+      http_path: /api/v1/health
+      initial_delay_seconds: 20
+      period_seconds: 15
+      timeout_seconds: 5
+      failure_threshold: 3
+    routes:
+      - path: /api
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: SERVICE_SCOPE
+        value: all
+      - key: DATABASE_URL
+        value: ${uvactive-db.DATABASE_URL}
+        scope: RUN_TIME
+      - key: JWT_MEMBER_SECRET
+        type: SECRET
+        scope: RUN_TIME
+      - key: JWT_STAFF_SECRET
+        type: SECRET
+        scope: RUN_TIME
+      - key: JWT_ADMIN_SECRET
+        type: SECRET
+        scope: RUN_TIME
+      - key: GOOGLE_STAFF_CLIENT_ID
+        scope: RUN_TIME
+      - key: EXPO_PUSH_ACCESS_TOKEN
+        type: SECRET
+        scope: RUN_TIME
+      - key: SMS_PROVIDER_API_KEY
+        type: SECRET
+        scope: RUN_TIME
+      - key: RESEND_API_KEY
+        type: SECRET
+        scope: RUN_TIME
+      - key: RESEND_FROM_EMAIL
+        scope: RUN_TIME
+      - key: CORS_ORIGINS
+        # Explicit origins, not "*" — the doc's own "Standardize
+        # deployment" step calls for explicit CORS. Update to the real
+        # static-site URLs DO assigns below (or your custom domains).
+        value: "https://uvactive-admin.ondigitalocean.app,https://uvactive-branch.ondigitalocean.app"
+        scope: RUN_TIME
+      - key: GRAPH_MAX_GAP_MS
+        value: "15000"
+      - key: GRAPH_MIN_DELTA_BPM
+        value: "4"
+      - key: GRAPH_MAX_CHART_POINTS
+        value: "400"
+      - key: RAW_READING_RETENTION_DAYS
+        value: "14"
+      # No REDIS_URL, no managed Redis add-on: rate limiting is
+      # Postgres-backed (see src/common/utils/pg-rate-limit.util.ts) and
+      # rides on the same `uvactive-db` above, so it's already correct
+      # if instance_count is raised past 1 later — nothing to add here.
+
+static_sites:
+  - name: admin-panel
+    github:
+      repo: your-org/uvactive-admin-panel # <-- update
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    build_command: npm run build
+    output_dir: dist
+    routes:
+      - path: /admin-panel
+    envs:
+      - key: VITE_API_BASE_URL
+        value: ${backend.PUBLIC_URL}/api/v1
+      - key: VITE_GOOGLE_STAFF_CLIENT_ID
+        scope: BUILD_TIME
+
+  - name: branch-portal
+    github:
+      repo: your-org/uvactive-branch-portal # <-- update
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    build_command: npm run build
+    output_dir: dist
+    routes:
+      - path: /branch-portal
+    envs:
+      - key: VITE_API_BASE_URL
+        value: ${backend.PUBLIC_URL}/api/v1
+      - key: VITE_GOOGLE_STAFF_CLIENT_ID
+        scope: BUILD_TIME
