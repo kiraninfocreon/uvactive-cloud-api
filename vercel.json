@@ -1,4 +1,3 @@
 {
-  "buildCommand": "npm ci && npm run build",
-  "framework": "custom"
+  "buildCommand": "npm ci && npx prisma generate && npm run build"
 }
