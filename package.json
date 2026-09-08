@@ -31,7 +31,7 @@
     "google-auth-library": "^9.14.1",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
-    "ioredis": "5.4.1",
+    "ioredis": "^5.4.1",
     "otplib": "^12.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -50,8 +50,7 @@
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
-    "typescript": "^5.5.4",
-    "@types/ioredis": "^4.28.0"
+    "typescript": "^5.5.4"
   },
   "engines": {
     "node": ">=18"
