@@ -70,7 +70,7 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleDestroy 
     const url = config.get<string>('redisUrl');
     if (url) {
       this.redis = new Redis(url, { maxRetriesPerRequest: 2 });
-      this.redis.on('error', (e) => this.logger.warn(`Redis error, request throttling may degrade: ${e.message}`));
+      this.redis.on('error', (e: Error) => this.logger.warn(`Redis error, request throttling may degrade: ${e.message}`));
     } else {
       this.logger.warn('REDIS_URL not set — request throttling is in-memory/per-process only (fine for a single instance, not enforced globally once you scale out).');
     }
